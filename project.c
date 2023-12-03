@@ -1,18 +1,29 @@
 #include "spimcore.h"
 
+/*
+gcc -o spimcore spimcore.c project.c
+./spimcore input_file.asc
+*/
+
 /* ALU */
 /* 10 Points */
 // Sim Ho
 void ALU(unsigned A, unsigned B, char ALUControl, unsigned *ALUresult,
          char *Zero) {
+  printf("---ALU---\n");
+  printf("A: %d, B: %d, ALUControl: %d\n", A, B, ALUControl);
   switch (ALUControl) {
     case 0b000:  // Z = A + B
+      printf("add\n");
       *ALUresult = A + B;
       break;
     case 0b001:  // Z = A - B
       *ALUresult = A - B;
       break;
     case 0b010:  // set on less than
+      *ALUresult = (int)A < (int)B ? 1 : 0;
+      break;
+    case 0b011:  // set on less than unsigned
       *ALUresult = A < B ? 1 : 0;
       break;
     case 0b100:  // Z = A AND B
@@ -27,30 +38,31 @@ void ALU(unsigned A, unsigned B, char ALUControl, unsigned *ALUresult,
     case 0b111:  // Z = NOT A
       *ALUresult = ~A;
       break;
+    default:
+      // unhandled ALUControl
+      printf("halt\n");
+      break;
   }
 
+  printf("ALUresult: %d\n", *ALUresult);
   // set Zero flag if result is zero
   *Zero = *ALUresult ? 0 : 1;
-
-  // if (*ALUresult == 1)
-  //     Zero = '1';
-  // else
-  //     Zero = '1';
 }
 
 /* instruction fetch */
 /* 10 Points */
 // Sim Ho
 int instruction_fetch(unsigned PC, unsigned *Mem, unsigned *instruction) {
+  printf("--- instruction fetch ---\n");
   // Lorena
-  // halt conditions
-  if (Mem[PC] % 4 != 0)
-    return 1;  // Jumping to an address that is not word-aligned
-  if (Mem[PC] > 0x13FFF)
-    return 1;  // Accessing data or jumping to an address that is beyond the
-               // memory
 
-  // Get the instruction from Mem and store it on the instruction variable
+  // If PC points to an address beyond 64kb or not word-aligned, halt
+  if (PC > 65535 | PC & 0x3) {
+    printf("halt\n");
+    return 1;
+  }
+
+  // Use PC to get the instruction from Mem and store it on instruction
   *instruction = Mem[PC >> 2];
 
   return 0;
@@ -62,37 +74,17 @@ int instruction_fetch(unsigned PC, unsigned *Mem, unsigned *instruction) {
 void instruction_partition(unsigned instruction, unsigned *op, unsigned *r1,
                            unsigned *r2, unsigned *r3, unsigned *funct,
                            unsigned *offset, unsigned *jsec) {
+  printf("--- instruction partition ---\n");
   // Sim Ho
-  //  extract op code
+
+  //  shifts the bits we want and mask everything else to be 0
   *op = (instruction >> 26) & 0x0000003F;
-  *r1 = (instruction >> 21) & 0x03E00000;
-  *r2 = (instruction >> 16) & 0x001F0000;
-  *r3 = (instruction >> 11) & 0x0000F800;
+  *r1 = (instruction >> 21) & 0x0000001F;
+  *r2 = (instruction >> 16) & 0x0000001F;
+  *r3 = (instruction >> 11) & 0x0000001F;
   *funct = (instruction & 0x0000003F);
   *offset = (instruction & 0x0000FFFF);
   *jsec = (instruction & 0x03FFFFFF);
-
-  // Lorina
-  //  get the first six bits for the opcode
-  *op = (instruction >> 26) & 0x0000003F;
-
-  // get the five bits for register 1
-  *r1 = (instruction >> 21) & 0x0000001F;
-
-  // get the five bits for register 2
-  *r2 = (instruction >> 16) & 0x0000001F;
-
-  // get the five bits for register 3
-  *r3 = (instruction >> 11) & 0x0000001F;
-
-  // get the first six-bits for the function
-  *funct = instruction & 0x0000003F;
-
-  // get the first 16-bits for the offset)
-  *offset = instruction & 0x0000FFFF;
-
-  // get the first 26-bits for jump to target address
-  *jsec = instruction & 0x03FFFFFF;
 }
 
 /* instruction decode */
@@ -110,109 +102,91 @@ int instruction_decode(unsigned op, struct_controls *controls) {
   controls->ALUSrc = 0;  // only R-types have ALUSrc = 0
   controls->RegWrite = 0;
 
-  if (op == 0x00)  // R type instruction
-  {
-    controls->ALUOp = 1;
-    controls->ALUSrc = 0;
-    controls->Branch = 2;
-    controls->Jump = 2;
-    controls->RegDst = 1;
-    controls->RegWrite = 1;
+  printf("---instruction decode---\n");
+  printf("op %u\n", op);
+
+  switch (op) {
+    case 0x00:
+      printf("received R type\n");
+      // R-type instruction
+      controls->RegDst = 1;
+      controls->ALUOp = 7;  // R-type instruction
+      controls->RegWrite = 1;
+      break;
+    case 0b100011:
+      printf("load word\n");
+      // Load word:
+      controls->MemRead = 1;
+      controls->MemtoReg = 1;
+      controls->ALUSrc = 1;  // instruction is an immediate type
+      controls->RegWrite = 1;
+      break;
+    case 0b101011:
+      // Store word:
+
+      controls->RegDst = 2;
+      controls->MemtoReg = 2;
+      controls->MemWrite = 1;
+      controls->ALUSrc = 1;
+      break;
+    case 0b001010:
+      // set less than immediate:
+
+      controls->ALUOp = 2;
+      controls->ALUSrc = 1;
+      controls->RegWrite = 1;
+      break;
+    case 0b001011:
+      // set less than immediate unsigned
+      // ALUSrc = 1; is an immediate instruction, the ALUop is (0010)
+      // ALUOp = 3 (0010) for set less than unsigned
+      // RegWrite = 1 because a register is being written
+      controls->ALUOp = 3;
+      controls->ALUSrc = 1;
+      controls->RegWrite = 1;
+      break;
+    case 0b000100:
+      // Branch Eq:
+      // Branch = 1 per instruction
+      // ALUSrc = 1 because the second operand for the ALU
+      printf("Branch is equal\n");
+      controls->RegDst = 2;
+      controls->Branch = 1;
+      controls->MemtoReg = 2;
+      controls->ALUSrc = 1;
+      break;
+    case 0b001000:
+      // add immediate:
+      controls->ALUOp = 0;
+      controls->RegWrite = 1;
+      controls->ALUSrc = 1;
+      break;
+    case 0b000010:
+      // Jump:
+      printf("jump\n");
+      controls->RegDst = 2;
+      controls->Jump = 1;
+      controls->Branch = 2;
+      controls->MemRead = 1;
+      controls->MemtoReg = 2;
+      controls->ALUSrc = 2;
+      break;
+    case 0b001111:
+      // Load Upper Immediate
+      printf("load upper Immediate\n");
+      controls->RegDst = 1;
+      controls->ALUSrc = 1;
+      controls->RegWrite = 1;
+      controls->ALUOp = 6;
+      break;
+    default:
+      // unhandled upcode
+      printf("halt\n");
+      return 1;
+      break;
   }
 
-  if (op == 0x08 || op == 0x23 || op == 0x2b || op == 0x0f || op == 0x04 ||
-      op == 0x0) {
-    controls->ALUOp = 1;
-    controls->ALUSrc = 1;
-    controls->Branch = 2;
-    controls->Jump = 2;
-  }
-  // J type instructions
-
-  if (op == 0x02)  // jump
-  {
-    controls->Branch = 1;
-    controls->Jump = 1;
-  }
-
-  // I type instuctions
-  // else if (op == 0x08) // addi
-  // {
-  //     controls->ALUOp = '1';
-  //     controls->ALUSrc = '1';
-  //     controls->Branch = '2';
-  //     controls->Jump = '2';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
-
-  // else if (op == 0x23) // load word
-  // {
-  //     controls->ALUOp = '0';
-  //     controls->ALUSrc = '1';
-  //     controls->Branch = '2';
-  //     controls->Jump = '2';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
-
-  // else if (op == 0x2b) // store word
-  // {
-  //     controls->ALUOp = '0';
-  //     controls->ALUSrc = '0';
-  //     controls->Branch = '0';
-  //     controls->Jump = '0';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
-
-  // else if (op == 0x0f) // Load Upper Immediate
-  // {
-  //     controls->ALUOp = '0';
-  //     controls->ALUSrc = '0';
-  //     controls->Branch = '0';
-  //     controls->Jump = '0';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
-
-  // else if (op == 0x04) // Branch if
-  // {
-  //     controls->ALUOp = '0';
-  //     controls->ALUSrc = '0';
-  //     controls->Branch = '0';
-  //     controls->Jump = '0';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
-
-  // else if (op == 0x0b) // set on less tan Immediate Unsigned
-  // {
-  //     controls->ALUOp = '0';
-  //     controls->ALUSrc = '0';
-  //     controls->Branch = '0';
-  //     controls->Jump = '0';
-  //     controls->MemRead = '0';
-  //     controls->MemtoReg = '0';
-  //     controls->MemWrite = '0';
-  //     controls->RegDst = '0';
-  //     controls->RegWrite = '0';
-  // }
+  return 0;
 }
 
 /* Read Register */
@@ -220,9 +194,10 @@ int instruction_decode(unsigned op, struct_controls *controls) {
 // Juwel
 void read_register(unsigned r1, unsigned r2, unsigned *Reg, unsigned *data1,
                    unsigned *data2) {
+  printf("--- read register ---\n");
   // assign data to read_data
-  data1 = r1;
-  data2 = r2;
+  *data1 = Reg[r1];
+  *data2 = Reg[r2];
 }
 
 /* Sign Extend */
@@ -230,7 +205,22 @@ void read_register(unsigned r1, unsigned r2, unsigned *Reg, unsigned *data1,
 // Assign the sign-extended value of offset to extended value.
 
 // juwel
-void sign_extend(unsigned offset, unsigned *extended_value) {}
+void sign_extend(unsigned offset, unsigned *extended_value) {
+  printf("--- sign extend ---\n");
+  // used to normalise the 16 bit immedate valuebefore passing the value to the
+  // ALU (ALU takes 32 bits) find the MSB, if it's zero extend the value to 16
+  // zeros, if it's one extend the value to 16 ones
+  int res = 1 << 15;
+
+  // check if MSB is 1
+  if (res & offset) {
+    // is negative value; add ones to the left per two's complement
+    *extended_value = offset | 0xFFFF0000;
+  } else {
+    // positive values are left alone
+    *extended_value = offset;
+  }
+}
 
 /* ALU operations */
 /* 10 Points */
@@ -238,46 +228,66 @@ void sign_extend(unsigned offset, unsigned *extended_value) {}
 int ALU_operations(unsigned data1, unsigned data2, unsigned extended_value,
                    unsigned funct, char ALUOp, char ALUSrc, unsigned *ALUresult,
                    char *Zero) {
+  printf("--- ALU_operations ---\n");
+  *ALUresult = 0;
+
   // R-type
   if (ALUSrc == 0) {
-    //  branch on equal
-    //  set less than
-    //  set less than unsigned
-    //  jump
-    switch (ALUOp) {
-      case 0b000:  // add
-        ALU(data1, data2, 0b000, ALUresult, Zero);
+    printf("is R type\n");
+    int alu;
+    switch (funct) {
+      case 0b100100:
+        printf("and\n");
+        // AND
+        alu = 4;
         break;
-      case 0b001:  // subtract
-        ALU(data1, data2, 0b001, ALUresult, Zero);
+      case 0b100110:
+        printf("xor\n");
+        // XOR
+        alu = 5;
         break;
-      case 0b010:  // set on less than
-        ALU((signed)data1, (signed)data2, 0b010, ALUresult, Zero);
+      case 0b100000:
+        printf("add\n");
+        // add
+        alu = 0;
         break;
-      case 0b011:  // set on less than unsigned
-        ALU(data1, data2, 0b010, ALUresult, Zero);
+      case 0b100010:
+        printf("subtract\n");
+        // subtract
+        alu = 1;
         break;
-      case 0b100:  // AND
-        ALU(data1, data2, 0b100, ALUresult, Zero);
+      case 0b101010:
+        printf("set less than\n");
+        // set less than
+        alu = 2;
         break;
-      case 0b101:  // XOR
-        ALU(data1, data2, 0b101, ALUresult, Zero);
+      case 0b101011:
+        // set less than unsigned
+        printf("set less than unsigned\n");
+        alu = 3;
         break;
-      case 0b110:  // Z = B << 16
-        ALU(data1, data2, 0b110, ALUresult, Zero);
-        break;
-      default:  // rest of R-type functions
-        ALU(data1, data2, funct, ALUresult, Zero);
+      default:
+        printf("unhandled funct\n");
+        // not handled
+        return 1;
         break;
     }
+    ALU(data1, data2, alu, ALUresult, Zero);
   }
   // I-type
-  else {
+  else if (ALUSrc == 1) {
+    printf("is i type\n");
     // add immediate
     // load upper immediate
     // set less than immediate
     // set less than immediate unsigned
+    if (ALUOp == 0) {
+      printf("Add immediate in ALU_operations\n");
+    }
+    ALU(data1, extended_value, ALUOp, ALUresult, Zero);
   }
+
+  return 0;
 }
 
 /* Read / Write Memory */
@@ -285,20 +295,34 @@ int ALU_operations(unsigned data1, unsigned data2, unsigned extended_value,
 // juwel
 int rw_memory(unsigned ALUresult, unsigned data2, char MemWrite, char MemRead,
               unsigned *memdata, unsigned *Mem) {
-  if (MemRead) *memdata = Mem[ALUresult >> 2];
-
-  if (MemWrite) Mem[ALUresult >> 2] = data2;
+  printf("--- rw memory ---\n");
   // return 1 on halt condition
+
+  printf(
+      "MemWrite: %d, MemRead: %d, ALUResult: %d, data2: %d, memdata: %d, Mem: "
+      "%d\n",
+      MemWrite, MemRead, ALUresult, data2, *memdata, *Mem);
+
+  if ((MemWrite == 1 || MemRead == 1) && ALUresult % 4 != 0) {
+    printf("halt\n");
+    return 1;
+  }
+
+  printf("MemRead issue at Mem[ALUresult]");
+  if (MemRead) *memdata = Mem[ALUresult >> 2];
+  printf("MemWrite issue");
+  if (MemWrite) Mem[ALUresult >> 2] = data2;
 
   return 0;
 }
-
 /* Write Register */
+
 /* 10 Points */
 // juwel
 void write_register(unsigned r2, unsigned r3, unsigned memdata,
                     unsigned ALUresult, char RegWrite, char RegDst,
                     char MemtoReg, unsigned *Reg) {
+  printf("--- write register ---\n");
   if (RegWrite) {
     if (MemtoReg) {
       if (RegDst)
@@ -318,17 +342,50 @@ void write_register(unsigned r2, unsigned r3, unsigned memdata,
 /* 10 Points */
 void PC_update(unsigned jsec, unsigned extended_value, char Branch, char Jump,
                char Zero, unsigned *PC) {
-  PC += 4;
-  // int instuctionSet = (jsec << 2) & 0b11111111111111111111111100;\
+  printf("--- PC update ---\n");
+  *PC = *PC + 4;
 
-  int jumpAddress = instuctionSet | (int)PC;
-
-  // combine PC+4 with instrcoin
-  //  instructionSet =
-
-  //
-
-  // shift and extend operation
-  int shiftLeft = extended_value << 2;
-  PC = PC + shiftLeft;
+  if (Jump == 1) {
+    /*if jump is 1, the PC equals the jump target shifted 2-bits left ORed
+  with
+     * the upper four bits of the PC to make 32-bits*/
+    *PC = (jsec << 2) | (*PC | 0xf0000000);  // dont do &
+  }
+  /*If branch is 1, the PC will be equal to the sign extended value shifted left
+     two bits  */
+  else if (Branch == 1 && Zero) {
+    *PC += (extended_value << 2);
+  }
 }
+
+/*
+else if (Branch == 1 && Zero) {
+  *PC += (extended_value << 2);
+}
+
+*PC += 4;                                       // first pc add operation
+int instuctionSet = (jsec << 2);                // shift instuction
+int tempPCShift = *PC << 28;                    // allign pc as the 28-31 bits
+int jumpAddress = instuctionSet | tempPCShift;  // combine into jump address
+
+int brachInt = Branch - '0';
+int zeroInt = Zero - '0';
+int jumpInt = Jump - '0';
+
+// Simulate an AND gate
+int mux_And_Op = brachInt && zeroInt;
+int mux_output;
+if (mux_And_Op) {  // mulitplex 1
+
+  // Second ALU add operation
+  int extendShifted = extended_value << 2;
+  mux_output = extendShifted + *PC;
+} else
+  mux_output = *PC;
+
+if (jumpInt)  // mulitplex 2
+  *PC = jumpAddress;
+else
+  *PC = mux_output;
+
+*/
